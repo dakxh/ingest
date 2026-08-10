@@ -202,168 +202,168 @@ jobs:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
           cat << 'EOF_PY' > process_and_upload.py
-                import os, sys, re, json, asyncio, subprocess
-                from guessit import guessit
-                import requests
-                from pyrogram import Client
+          import os, sys, re, json, asyncio, subprocess
+          from guessit import guessit
+          import requests
+          from pyrogram import Client
 
-                # Setup Variables
-                api_id = os.environ.get('TG_API_ID')
-                api_hash = os.environ.get('TG_API_HASH')
-                bot_token = os.environ.get('TG_BOT_TOKEN')
-                chat_id = int(os.environ.get('TG_CHAT_ID'))
-                tmdb_key = os.environ.get('TMDB_API_KEY')
+          # Setup Variables
+          api_id = os.environ.get('TG_API_ID')
+          api_hash = os.environ.get('TG_API_HASH')
+          bot_token = os.environ.get('TG_BOT_TOKEN')
+          chat_id = int(os.environ.get('TG_CHAT_ID'))
+          tmdb_key = os.environ.get('TMDB_API_KEY')
 
-                video_file = sys.argv[1]
-                filename = os.path.basename(video_file)
+          video_file = sys.argv[1]
+          filename = os.path.basename(video_file)
 
-                # --- 1. Aggressive Filename Sanitization ---
-                g = guessit(filename)
-                raw_title = str(g.get('title', 'Unknown')).strip()
-                year = str(g.get('year', ''))
-                vid_type = 'tv' if g.get('season') else 'movie'
+          # --- 1. Aggressive Filename Sanitization ---
+          g = guessit(filename)
+          raw_title = str(g.get('title', 'Unknown')).strip()
+          year = str(g.get('year', ''))
+          vid_type = 'tv' if g.get('season') else 'movie'
 
-                # Strip release groups like [scloudx.lol] and extract year via regex
-                year_matches = list(re.finditer(r'(?:\b|\()((?:19|20)\d{2})(?:\b|\))', filename))
-                if year_matches:
-                    last_year_match = year_matches[-1]
-                    year = last_year_match.group(1)
-                    raw_prefix = filename[:last_year_match.start()]
-                    # Split at season/episode boundaries
-                    raw_prefix = re.split(r'(?i)[ _.-]+(?:S\d{1,2}E\d{1,4}|S\d{1,2}|Season\s?\d{1,2}|E\d{1,4})\b', raw_prefix)[0]
-                    # Eradicate bracket tags and clean separators
-                    regex_title = re.sub(r'^\[.*?\]\s*', '', raw_prefix).replace('.', ' ').strip(' -_()[]')
-                    clean_title = regex_title if (len(regex_title) > 2 and regex_title.lower() != 'unknown') else raw_title
-                else:
-                    clean_title = raw_title
+          # Strip release groups like [scloudx.lol] and extract year via regex
+          year_matches = list(re.finditer(r'(?:\b|\()((?:19|20)\d{2})(?:\b|\))', filename))
+          if year_matches:
+              last_year_match = year_matches[-1]
+              year = last_year_match.group(1)
+              raw_prefix = filename[:last_year_match.start()]
+              # Split at season/episode boundaries
+              raw_prefix = re.split(r'(?i)[ _.-]+(?:S\d{1,2}E\d{1,4}|S\d{1,2}|Season\s?\d{1,2}|E\d{1,4})\b', raw_prefix)[0]
+              # Eradicate bracket tags and clean separators
+              regex_title = re.sub(r'^\[.*?\]\s*', '', raw_prefix).replace('.', ' ').strip(' -_()[]')
+              clean_title = regex_title if (len(regex_title) > 2 and regex_title.lower() != 'unknown') else raw_title
+          else:
+              clean_title = raw_title
 
-                # --- 2. FFprobe Probing (Quality, Audio, Subs) ---
-                quality = 'Unknown'
-                audio_langs = set()
-                subtitles = []
+          # --- 2. FFprobe Probing (Quality, Audio, Subs) ---
+          quality = 'Unknown'
+          audio_langs = set()
+          subtitles = []
 
-                try:
-                    cmd = ['ffprobe', '-v', 'error', '-show_streams', '-of', 'json', video_file]
-                    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                    probe_data = json.loads(res.stdout)
+          try:
+              cmd = ['ffprobe', '-v', 'error', '-show_streams', '-of', 'json', video_file]
+              res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+              probe_data = json.loads(res.stdout)
     
-                    for stream in probe_data.get('streams', []):
-                        codec_type = stream.get('codec_type')
-                        tags = stream.get('tags', {})
-                        lang = tags.get('language', 'und')
+              for stream in probe_data.get('streams', []):
+                  codec_type = stream.get('codec_type')
+                  tags = stream.get('tags', {})
+                  lang = tags.get('language', 'und')
         
-                        if codec_type == 'video':
-                            height = stream.get('height', 0)
-                            if height >= 2160: quality = '2160p'
-                            elif height >= 1080: quality = '1080p'
-                            elif height >= 720: quality = '720p'
-                            else: quality = 'SD'
-                        elif codec_type == 'audio':
-                            audio_langs.add(lang)
-                        elif codec_type == 'subtitle':
-                            subtitles.append({'language': lang, 'codec': stream.get('codec_name', 'unknown')})
-                except Exception as e:
-                    print(f"FFprobe extraction failed: {e}")
+                  if codec_type == 'video':
+                      height = stream.get('height', 0)
+                      if height >= 2160: quality = '2160p'
+                      elif height >= 1080: quality = '1080p'
+                      elif height >= 720: quality = '720p'
+                      else: quality = 'SD'
+                  elif codec_type == 'audio':
+                      audio_langs.add(lang)
+                  elif codec_type == 'subtitle':
+                      subtitles.append({'language': lang, 'codec': stream.get('codec_name', 'unknown')})
+          except Exception as e:
+              print(f"FFprobe extraction failed: {e}")
 
-                # Apply visual tags based on filename regex
-                visual_tags = []
-                if bool(re.search(r'(hdr|dovi|\bdv\b)', filename.lower())): visual_tags.append('HDR')
-                if 'imax' in filename.lower(): visual_tags.append('IMAX')
-                visual_tags_str = ",".join(visual_tags) if visual_tags else None
+          # Apply visual tags based on filename regex
+          visual_tags = []
+          if bool(re.search(r'(hdr|dovi|\bdv\b)', filename.lower())): visual_tags.append('HDR')
+          if 'imax' in filename.lower(): visual_tags.append('IMAX')
+          visual_tags_str = ",".join(visual_tags) if visual_tags else None
 
-                # --- 3. TMDB API Resolution ---
-                media_id, final_title = None, clean_title
-                overview, poster, backdrop, rating, genres = None, None, None, 0.0, None
+          # --- 3. TMDB API Resolution ---
+          media_id, final_title = None, clean_title
+          overview, poster, backdrop, rating, genres = None, None, None, 0.0, None
 
-                if tmdb_key and clean_title != 'Unknown':
-                    search_type = 'tv' if vid_type == 'tv' else 'movie'
-                    search_url = f'https://api.themoviedb.org/3/search/{search_type}?api_key={tmdb_key}&query={clean_title}'
-                    if year: search_url += f'&year={year}' if search_type == 'movie' else f'&first_air_date_year={year}'
+          if tmdb_key and clean_title != 'Unknown':
+              search_type = 'tv' if vid_type == 'tv' else 'movie'
+              search_url = f'https://api.themoviedb.org/3/search/{search_type}?api_key={tmdb_key}&query={clean_title}'
+              if year: search_url += f'&year={year}' if search_type == 'movie' else f'&first_air_date_year={year}'
     
-                    try:
-                        res = requests.get(search_url).json()
-                        if res.get('results'):
-                            match = res['results'][0]
-                            media_id = str(match.get('id'))
-                            final_title = match.get('name' if vid_type == 'tv' else 'title', clean_title)
-                            overview = match.get('overview')
-                            rating = round(match.get('vote_average', 0.0), 1)
+              try:
+                  res = requests.get(search_url).json()
+                  if res.get('results'):
+                      match = res['results'][0]
+                      media_id = str(match.get('id'))
+                      final_title = match.get('name' if vid_type == 'tv' else 'title', clean_title)
+                      overview = match.get('overview')
+                      rating = round(match.get('vote_average', 0.0), 1)
             
-                            if match.get('poster_path'): 
-                                poster = f"https://image.tmdb.org/t/p/w600_and_h900_bestv2{match.get('poster_path')}"
-                            if match.get('backdrop_path'): 
-                                backdrop = f"https://image.tmdb.org/t/p/original{match.get('backdrop_path')}"
+                      if match.get('poster_path'): 
+                          poster = f"https://image.tmdb.org/t/p/w600_and_h900_bestv2{match.get('poster_path')}"
+                      if match.get('backdrop_path'): 
+                          backdrop = f"https://image.tmdb.org/t/p/original{match.get('backdrop_path')}"
             
-                            # Map genre IDs to a simple array
-                            genre_ids = match.get('genre_ids', [])
-                            if genre_ids: genres = json.dumps(genre_ids)
-                    except Exception as e:
-                        print(f"TMDB fetch failed: {e}")
+                      # Map genre IDs to a simple array
+                      genre_ids = match.get('genre_ids', [])
+                      if genre_ids: genres = json.dumps(genre_ids)
+              except Exception as e:
+                  print(f"TMDB fetch failed: {e}")
 
-                if not media_id: 
-                    media_id = re.sub(r'[^a-z0-9]', '', f"{clean_title.lower()}{year}")
+          if not media_id: 
+              media_id = re.sub(r'[^a-z0-9]', '', f"{clean_title.lower()}{year}")
 
-                # --- 4. Telegram Upload Phase ---
-                async def upload_chunks():
-                    app = Client("tg_uploader", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
-                    await app.start()
+          # --- 4. Telegram Upload Phase ---
+          async def upload_chunks():
+              app = Client("tg_uploader", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
+              await app.start()
     
-                    chunk_files = sorted([f for f in os.listdir('chunks') if f.startswith('chunk_')])
-                    tg_chunks = []
-                    start_byte = 0
+              chunk_files = sorted([f for f in os.listdir('chunks') if f.startswith('chunk_')])
+              tg_chunks = []
+              start_byte = 0
     
-                    print(f"🚀 Uploading {len(chunk_files)} chunks to Telegram...")
-                    for i, chunk in enumerate(chunk_files):
-                        chunk_path = os.path.join('chunks', chunk)
-                        chunk_size = os.path.getsize(chunk_path)
-                        end_byte = start_byte + chunk_size - 1
+              print(f"🚀 Uploading {len(chunk_files)} chunks to Telegram...")
+              for i, chunk in enumerate(chunk_files):
+                  chunk_path = os.path.join('chunks', chunk)
+                  chunk_size = os.path.getsize(chunk_path)
+                  end_byte = start_byte + chunk_size - 1
         
-                        print(f"📤 Uploading Part {i} ({chunk_size} bytes)...")
-                        msg = await app.send_document(chat_id, chunk_path, file_name=f"{media_id}_part{i}.bin")
+                  print(f"📤 Uploading Part {i} ({chunk_size} bytes)...")
+                  msg = await app.send_document(chat_id, chunk_path, file_name=f"{media_id}_part{i}.bin")
         
-                        tg_chunks.append({
-                            "chunk_index": i,
-                            "message_id": msg.id,
-                            "file_id": msg.document.file_id,
-                            "start_byte": start_byte,
-                            "end_byte": end_byte,
-                            "size": chunk_size
-                        })
-                        start_byte += chunk_size
-                        os.remove(chunk_path)
+                  tg_chunks.append({
+                      "chunk_index": i,
+                      "message_id": msg.id,
+                      "file_id": msg.document.file_id,
+                      "start_byte": start_byte,
+                      "end_byte": end_byte,
+                      "size": chunk_size
+                  })
+                  start_byte += chunk_size
+                  os.remove(chunk_path)
     
-                    await app.stop()
-                    return tg_chunks
+              await app.stop()
+              return tg_chunks
 
-                loop = asyncio.get_event_loop()
-                tg_chunks = loop.run_until_complete(upload_chunks())
+          loop = asyncio.get_event_loop()
+          tg_chunks = loop.run_until_complete(upload_chunks())
 
-                # --- 5. Generate d1_payloads.json ---
-                payload = {
-                    "media_id": media_id,
-                    "title": final_title,
-                    "year": year,
-                    "type": vid_type,
-                    "overview": overview,
-                    "poster_path": poster,
-                    "backdrop_path": backdrop,
-                    "rating": rating,
-                    "genres": genres,
-                    "quality": quality,
-                    "visual_tags": visual_tags_str,
-                    "audio_languages": json.dumps(list(audio_langs)) if audio_langs else '["und"]',
-                    "subtitles": json.dumps(subtitles) if subtitles else "[]",
-                    "container": filename.split('.')[-1].lower(),
-                    "chunks": tg_chunks
-                }
+          # --- 5. Generate d1_payloads.json ---
+          payload = {
+              "media_id": media_id,
+              "title": final_title,
+              "year": year,
+              "type": vid_type,
+              "overview": overview,
+              "poster_path": poster,
+              "backdrop_path": backdrop,
+              "rating": rating,
+              "genres": genres,
+              "quality": quality,
+              "visual_tags": visual_tags_str,
+              "audio_languages": json.dumps(list(audio_langs)) if audio_langs else '["und"]',
+              "subtitles": json.dumps(subtitles) if subtitles else "[]",
+              "container": filename.split('.')[-1].lower(),
+              "chunks": tg_chunks
+          }
 
-                if vid_type == 'tv':
-                    payload['season'] = g.get('season')
-                    payload['episode'] = g.get('episode')
+          if vid_type == 'tv':
+              payload['season'] = g.get('season')
+              payload['episode'] = g.get('episode')
 
-                with open('d1_payloads.json', 'w') as f:
-                    json.dump([payload], f, indent=4)
-                print("✅ Payload generated successfully.")
+          with open('d1_payloads.json', 'w') as f:
+              json.dump([payload], f, indent=4)
+          print("✅ Payload generated successfully.")
           EOF_PY
           
           # Pass original filename to extract correct metadata
