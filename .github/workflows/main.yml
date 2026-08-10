@@ -277,8 +277,18 @@ jobs:
                   res = requests.get(search_url).json()
                   if res.get('results'):
                       match = res['results'][0]
-                      media_id = str(match.get('id'))
+                      tmdb_id = str(match.get('id'))
                       final_title = match.get('name' if vid_type == 'tv' else 'title', clean_title)
+                      
+                      # NEW: Fetch IMDb ID using the discovered TMDB ID
+                      ext_url = f'https://api.themoviedb.org/3/{search_type}/{tmdb_id}/external_ids?api_key={tmdb_key}'
+                      ext_res = requests.get(ext_url).json()
+                      imdb_id = ext_res.get('imdb_id')
+                      
+                      if imdb_id:
+                          media_id = imdb_id
+                      else:
+                          print(f"⚠️ No IMDb ID found for TMDB {tmdb_id}. Falling back to clean title.")
               except Exception as e:
                   print(f"TMDB fetch failed: {e}")
 
