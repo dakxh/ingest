@@ -38,8 +38,8 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
           
           sudo apt-get update && sudo apt-get install -y ffmpeg mkvtoolnix libcurl4-openssl-dev jq unzip unrar cloudflare-warp
-          pip install -U --break-system-packages pyrogram tgcrypto guessit requests google-auth tqdm
-
+          pip install -U --break-system-packages pyrofork tgcrypto guessit requests google-auth tqdm
+          
       - name: Acknowledge Payload
         id: payload_ack
         run: |
