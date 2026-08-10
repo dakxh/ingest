@@ -118,12 +118,21 @@ jobs:
           WebUI\Port=8085
           WebUI\AuthSubnetWhitelistEnabled=true
           WebUI\AuthSubnetWhitelist=127.0.0.1/32, ::1/128
+          WebUI\LocalHostAuth=false
           Downloads\SavePath=$(pwd)/workspace/
+          # Aggressive NAT piercing & Proxy forcing
           BitTorrent\Session\MaxConnections=500
+          BitTorrent\Session\Encryption=1
+          BitTorrent\Session\DHT=true
+          BitTorrent\Session\PeX=true
+          BitTorrent\Session\LSD=false
+          Network\Port=443
           Proxy\Type=2
           Proxy\IP=127.0.0.1
           Proxy\Port=40000
           Proxy\Enabled=true
+          Proxy\PeerExchange=true
+          Proxy\OnlyForTorrents=false
           EOF_CONF
             ./qbittorrent-nox -d --confirm-legal-notice
             cat << 'EOF_PY' > qbit_monitor.py
