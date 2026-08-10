@@ -169,30 +169,7 @@ jobs:
             rm -f "$DIR"/*.rar "$DIR"/*.r[0-9][0-9] "$DIR"/*.sfv "$DIR"/*.nfo
           done 9< <(find workspace -type f -name "*.rar")
 
-      - name: Optimize Headers and Split Payload
-        if: env.found == 'true'
-        run: |
-          VIDEO_FILE=$(find workspace -type f \( -name "*.mkv" -o -name "*.mp4" \) | head -n 1)
-          if [ -z "$VIDEO_FILE" ]; then echo "❌ No video file found."; exit 1; fi
-          
-          echo "🎬 Processing: $VIDEO_FILE"
-          EXT="${VIDEO_FILE##*.}"
-          
-          if [ "${EXT,,}" == "mp4" ]; then
-            ffmpeg -v error -i "$VIDEO_FILE" -c copy -movflags +faststart "workspace/optimized.mp4"
-            rm "$VIDEO_FILE"
-            VIDEO_FILE="workspace/optimized.mp4"
-          elif [ "${EXT,,}" == "mkv" ]; then
-            mkvpropedit "$VIDEO_FILE" --tags all: --add-track-statistics-tags
-          fi
-          
-          echo "✂️ Slicing into 1.8GB Chunks..."
-          mkdir -p chunks
-          # Split strict 1800MB blocks
-          split -b 1800M "$VIDEO_FILE" "chunks/chunk_"
-          rm "$VIDEO_FILE"
-
-      - name: TMDB Resolution & Telegram MTProto Upload
+      - name: Optimize, Probe, Split, and Upload
         if: env.found == 'true'
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
@@ -201,13 +178,33 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
+          # 1. Locate the exact downloaded file
+          VIDEO_FILE=$(find workspace -type f \( -name "*.mkv" -o -name "*.mp4" \) | head -n 1)
+          if [ -z "$VIDEO_FILE" ]; then echo "❌ No video file found."; exit 1; fi
+          
+          echo "🎬 Processing: $VIDEO_FILE"
+          EXT="${VIDEO_FILE##*.}"
+          
+          # 2. Optimize Container (Preserving the original filename!)
+          if [ "${EXT,,}" == "mp4" ]; then
+            ffmpeg -v error -i "$VIDEO_FILE" -c copy -movflags +faststart "workspace/optimized_temp.mp4"
+            mv "workspace/optimized_temp.mp4" "$VIDEO_FILE"
+          elif [ "${EXT,,}" == "mkv" ]; then
+            mkvpropedit "$VIDEO_FILE" --tags all: --add-track-statistics-tags
+          fi
+          
+          # 3. Split into 1.8GB Chunks
+          echo "✂️ Slicing into 1.8GB Chunks..."
+          mkdir -p chunks
+          split -b 1800M "$VIDEO_FILE" "chunks/chunk_"
+          
+          # 4. Generate the Python Script
           cat << 'EOF_PY' > process_and_upload.py
           import os, sys, re, json, asyncio, subprocess
           from guessit import guessit
           import requests
           from pyrogram import Client
 
-          # Setup Variables
           api_id = os.environ.get('TG_API_ID')
           api_hash = os.environ.get('TG_API_HASH')
           bot_token = os.environ.get('TG_BOT_TOKEN')
@@ -217,27 +214,24 @@ jobs:
           video_file = sys.argv[1]
           filename = os.path.basename(video_file)
 
-          # --- 1. Aggressive Filename Sanitization ---
+          # --- A. Aggressive Filename Sanitization ---
           g = guessit(filename)
           raw_title = str(g.get('title', 'Unknown')).strip()
           year = str(g.get('year', ''))
           vid_type = 'tv' if g.get('season') else 'movie'
 
-          # Strip release groups like [scloudx.lol] and extract year via regex
           year_matches = list(re.finditer(r'(?:\b|\()((?:19|20)\d{2})(?:\b|\))', filename))
           if year_matches:
               last_year_match = year_matches[-1]
               year = last_year_match.group(1)
               raw_prefix = filename[:last_year_match.start()]
-              # Split at season/episode boundaries
               raw_prefix = re.split(r'(?i)[ _.-]+(?:S\d{1,2}E\d{1,4}|S\d{1,2}|Season\s?\d{1,2}|E\d{1,4})\b', raw_prefix)[0]
-              # Eradicate bracket tags and clean separators
               regex_title = re.sub(r'^\[.*?\]\s*', '', raw_prefix).replace('.', ' ').strip(' -_()[]')
               clean_title = regex_title if (len(regex_title) > 2 and regex_title.lower() != 'unknown') else raw_title
           else:
               clean_title = raw_title
 
-          # --- 2. FFprobe Probing (Quality, Audio, Subs) ---
+          # --- B. FFprobe Probing ---
           quality = 'Unknown'
           audio_langs = set()
           subtitles = []
@@ -246,12 +240,12 @@ jobs:
               cmd = ['ffprobe', '-v', 'error', '-show_streams', '-of', 'json', video_file]
               res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
               probe_data = json.loads(res.stdout)
-    
+              
               for stream in probe_data.get('streams', []):
                   codec_type = stream.get('codec_type')
                   tags = stream.get('tags', {})
                   lang = tags.get('language', 'und')
-        
+                  
                   if codec_type == 'video':
                       height = stream.get('height', 0)
                       if height >= 2160: quality = '2160p'
@@ -265,13 +259,12 @@ jobs:
           except Exception as e:
               print(f"FFprobe extraction failed: {e}")
 
-          # Apply visual tags based on filename regex
           visual_tags = []
           if bool(re.search(r'(hdr|dovi|\bdv\b)', filename.lower())): visual_tags.append('HDR')
           if 'imax' in filename.lower(): visual_tags.append('IMAX')
           visual_tags_str = ",".join(visual_tags) if visual_tags else None
 
-          # --- 3. TMDB API Resolution ---
+          # --- C. TMDB API Resolution ---
           media_id, final_title = None, clean_title
           overview, poster, backdrop, rating, genres = None, None, None, 0.0, None
 
@@ -279,7 +272,7 @@ jobs:
               search_type = 'tv' if vid_type == 'tv' else 'movie'
               search_url = f'https://api.themoviedb.org/3/search/{search_type}?api_key={tmdb_key}&query={clean_title}'
               if year: search_url += f'&year={year}' if search_type == 'movie' else f'&first_air_date_year={year}'
-    
+              
               try:
                   res = requests.get(search_url).json()
                   if res.get('results'):
@@ -288,13 +281,12 @@ jobs:
                       final_title = match.get('name' if vid_type == 'tv' else 'title', clean_title)
                       overview = match.get('overview')
                       rating = round(match.get('vote_average', 0.0), 1)
-            
+                      
                       if match.get('poster_path'): 
                           poster = f"https://image.tmdb.org/t/p/w600_and_h900_bestv2{match.get('poster_path')}"
                       if match.get('backdrop_path'): 
                           backdrop = f"https://image.tmdb.org/t/p/original{match.get('backdrop_path')}"
-            
-                      # Map genre IDs to a simple array
+                      
                       genre_ids = match.get('genre_ids', [])
                       if genre_ids: genres = json.dumps(genre_ids)
               except Exception as e:
@@ -303,24 +295,24 @@ jobs:
           if not media_id: 
               media_id = re.sub(r'[^a-z0-9]', '', f"{clean_title.lower()}{year}")
 
-          # --- 4. Telegram Upload Phase ---
+          # --- D. Telegram Upload Phase ---
           async def upload_chunks():
               app = Client("tg_uploader", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
               await app.start()
-    
+              
               chunk_files = sorted([f for f in os.listdir('chunks') if f.startswith('chunk_')])
               tg_chunks = []
               start_byte = 0
-    
+              
               print(f"🚀 Uploading {len(chunk_files)} chunks to Telegram...")
               for i, chunk in enumerate(chunk_files):
                   chunk_path = os.path.join('chunks', chunk)
                   chunk_size = os.path.getsize(chunk_path)
                   end_byte = start_byte + chunk_size - 1
-        
+                  
                   print(f"📤 Uploading Part {i} ({chunk_size} bytes)...")
                   msg = await app.send_document(chat_id, chunk_path, file_name=f"{media_id}_part{i}.bin")
-        
+                  
                   tg_chunks.append({
                       "chunk_index": i,
                       "message_id": msg.id,
@@ -331,14 +323,14 @@ jobs:
                   })
                   start_byte += chunk_size
                   os.remove(chunk_path)
-    
+              
               await app.stop()
               return tg_chunks
 
           loop = asyncio.get_event_loop()
           tg_chunks = loop.run_until_complete(upload_chunks())
 
-          # --- 5. Generate d1_payloads.json ---
+          # --- E. Generate d1_payloads.json ---
           payload = {
               "media_id": media_id,
               "title": final_title,
@@ -365,10 +357,13 @@ jobs:
               json.dump([payload], f, indent=4)
           print("✅ Payload generated successfully.")
           EOF_PY
+
+          # 5. Execute Python with the actual video file present!
+          python3 process_and_upload.py "$VIDEO_FILE"
           
-          # Pass original filename to extract correct metadata
-          ORIGINAL_FILE=$(ls workspace | head -n 1)
-          python3 process_and_upload.py "$ORIGINAL_FILE"
+          # 6. Safely delete the original file to free up runner space
+          echo "🗑️ Cleaning up original file..."
+          rm "$VIDEO_FILE"
 
       - name: Sync Metadata to Cloudflare D1
         if: env.found == 'true' && success()
