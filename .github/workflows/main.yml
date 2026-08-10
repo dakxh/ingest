@@ -1,4 +1,4 @@
-name: Torrent to Telegram MTProto Pipeline
+name: pipeline
 
 on:
   workflow_dispatch:
