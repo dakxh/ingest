@@ -279,16 +279,6 @@ jobs:
                       match = res['results'][0]
                       media_id = str(match.get('id'))
                       final_title = match.get('name' if vid_type == 'tv' else 'title', clean_title)
-                      overview = match.get('overview')
-                      rating = round(match.get('vote_average', 0.0), 1)
-                      
-                      if match.get('poster_path'): 
-                          poster = f"https://image.tmdb.org/t/p/w600_and_h900_bestv2{match.get('poster_path')}"
-                      if match.get('backdrop_path'): 
-                          backdrop = f"https://image.tmdb.org/t/p/original{match.get('backdrop_path')}"
-                      
-                      genre_ids = match.get('genre_ids', [])
-                      if genre_ids: genres = json.dumps(genre_ids)
               except Exception as e:
                   print(f"TMDB fetch failed: {e}")
 
@@ -336,11 +326,6 @@ jobs:
               "title": final_title,
               "year": year,
               "type": vid_type,
-              "overview": overview,
-              "poster_path": poster,
-              "backdrop_path": backdrop,
-              "rating": rating,
-              "genres": genres,
               "quality": quality,
               "visual_tags": visual_tags_str,
               "audio_languages": json.dumps(list(audio_langs)) if audio_langs else '["und"]',
